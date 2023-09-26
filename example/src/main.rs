@@ -7,7 +7,7 @@ pub trait Bar {
 
     fn add(&mut self, x: &i32, y: i32) -> i32;
 
-    fn sub(x: &mut i32, y: i32) {}
+    fn sub(x: &mut i32, y: i32, (t, r): (u32, u32)) {}
 }
 
 fn main() {

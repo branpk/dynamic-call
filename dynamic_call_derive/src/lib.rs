@@ -1,6 +1,5 @@
-use proc_macro::TokenStream;
-use proc_macro2::Span;
-use quote::quote;
+use proc_macro2::{Span, TokenStream};
+use quote::{format_ident, quote, TokenStreamExt};
 use syn::{
     parse::Error, parse_macro_input, Attribute, FnArg, Ident, ItemTrait, Pat, Signature, TraitItem,
     TraitItemFn, Type,
@@ -27,7 +26,10 @@ enum RefType {
 }
 
 #[proc_macro_attribute]
-pub fn skip(_args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn skip(
+    _args: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
     input
 }
 
@@ -97,144 +99,232 @@ fn read_methods(input: &ItemTrait) -> Vec<Method> {
     methods
 }
 
+fn generate_call_specific_method(trait_ident: &Ident, method: &Method) -> TokenStream {
+    let method_ident = &method.ident;
+    let method_name_lit = method_ident.to_string();
+    let call_method_name = format_ident!("call_method_{method_ident}");
+
+    let this_param = match method.self_ref_type {
+        Some(RefType::Ref) => quote!(this: &impl #trait_ident,),
+        Some(RefType::MutRef) => quote!(this: &mut impl #trait_ident,),
+        Some(RefType::Value) => quote!(this: impl #trait_ident,),
+        None => quote!(),
+    };
+
+    let this_arg = match method.self_ref_type {
+        Some(_) => quote!(this,),
+        None => quote!(),
+    };
+
+    let mut param_names_array = TokenStream::new();
+    method
+        .params
+        .iter()
+        .map(|param| {
+            let name_lit = param.ident.to_string();
+            quote!(#name_lit,)
+        })
+        .for_each(|stream| param_names_array.append_all([stream]));
+
+    let mut param_assigns = TokenStream::new();
+    method
+        .params
+        .iter()
+        .enumerate()
+        .map(|(i, param)| {
+            let value_ident = format_ident!("arg_{i}");
+            let name_lit = param.ident.to_string();
+            quote! {
+                let #value_ident = deserialize_arg(arg_array[#i], #name_lit)?;
+            }
+        })
+        .for_each(|stream| param_assigns.append_all([stream]));
+
+    let mut call_params = TokenStream::new();
+    method
+        .params
+        .iter()
+        .enumerate()
+        .map(|(i, param)| {
+            let value_ident = format_ident!("arg_{i}");
+            match param.ref_type {
+                RefType::Ref => quote!(&#value_ident,),
+                RefType::MutRef => quote!(&mut #value_ident,),
+                RefType::Value => quote!(#value_ident,),
+            }
+        })
+        .for_each(|stream| call_params.append_all([stream]));
+
+    quote! {
+        pub fn #call_method_name(
+            #this_param
+            args: serde_json::Value,
+        ) -> Result<serde_json::Value, Error> {
+            let inner = || -> Result<serde_json::Value, ErrorKind> {
+                let arg_array = get_serialized_args(args, &[#param_names_array])?;
+                #param_assigns
+
+                let result = #trait_ident::add(#this_arg #call_params);
+
+                let result_value = serialize_result(result)?;
+                Ok(result_value)
+            };
+            inner().map_err(|kind| Error {
+                method_name: Some(#method_name_lit.to_string()),
+                kind,
+            })
+        }
+    }
+}
+
 #[proc_macro_attribute]
-pub fn dynamic_call(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn dynamic_call(
+    args: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
     let args = parse_macro_input!(args as Ident);
     let input = parse_macro_input!(input as ItemTrait);
 
-    let trait_name = &input.ident;
+    let trait_ident = &input.ident;
     let methods = read_methods(&input);
-    panic!("{:#?}", methods);
+
+    let mut call_methods = TokenStream::new();
+    methods
+        .iter()
+        .map(|method| generate_call_specific_method(trait_ident, method))
+        .for_each(|stream| call_methods.append_all([stream]));
 
     let expanded = quote! {
-        #input
+            #input
 
-        mod foo_dynamic_call {
-            use ::dynamic_call::{deserialize_arg, get_serialized_args, serialize_result, Error, ErrorKind};
-            use ::dynamic_call::serde_json as serde_json;
+            mod #args {
+                use ::dynamic_call::{deserialize_arg, get_serialized_args, serialize_result, Error, ErrorKind};
+                use ::dynamic_call::serde_json as serde_json;
 
-            use super::#trait_name;
+                use super::#trait_ident;
 
-            pub fn call_method_add(
-                this: &mut impl #trait_name,
-                args: serde_json::Value,
-            ) -> Result<serde_json::Value, Error> {
-                let inner = || -> Result<serde_json::Value, ErrorKind> {
-                    let [x_json, y_json] = get_serialized_args(args, &["x", "y"])?;
-                    let x = deserialize_arg(x_json, "x")?;
-                    let y = deserialize_arg(y_json, "y")?;
+                #call_methods
 
-                    let result = #trait_name::add(this, &x, y);
+    //             pub fn call_method_add(
+    //                 this: &mut impl #trait_ident,
+    //                 args: serde_json::Value,
+    //             ) -> Result<serde_json::Value, Error> {
+    //                 let inner = || -> Result<serde_json::Value, ErrorKind> {
+    //                     let [x_json, y_json] = get_serialized_args(args, &["x", "y"])?;
+    //                     let x = deserialize_arg(x_json, "x")?;
+    //                     let y = deserialize_arg(y_json, "y")?;
+    //
+    //                     let result = #trait_ident::add(this, &x, y);
+    //
+    //                     let result_value = serialize_result(result)?;
+    //                     Ok(result_value)
+    //                 };
+    //                 inner().map_err(|kind| Error {
+    //                     method_name: Some("add".to_string()),
+    //                     kind,
+    //                 })
+    //             }
 
-                    let result_value = serialize_result(result)?;
-                    Ok(result_value)
-                };
-                inner().map_err(|kind| Error {
-                    method_name: Some("add".to_string()),
-                    kind,
-                })
-            }
-
-            pub fn call_method(
-                this: &impl #trait_name,
-                method: &str,
-                args: serde_json::Value,
-            ) -> Result<serde_json::Value, Error> {
-                match method {
-                    "add" => Err(Error {
-                        method_name: Some(method.to_string()),
-                        kind: ErrorKind::MethodRequiresMut,
-                    }),
-                    _ => Err(Error {
-                        method_name: Some(method.to_string()),
-                        kind: ErrorKind::NoSuchMethod,
-                    }),
-                }
-            }
-
-            pub fn call_method_mut(
-                this: &mut impl #trait_name,
-                method: &str,
-                args: serde_json::Value,
-            ) -> Result<serde_json::Value, Error> {
-                match method {
-                    "add" => call_method_add(this, args),
-                    _ => Err(Error {
-                        method_name: Some(method.to_string()),
-                        kind: ErrorKind::NoSuchMethod,
-                    }),
-                }
-            }
-
-            pub fn call_dynamic(
-                this: &impl #trait_name,
-                json: serde_json::Value,
-            ) -> Result<serde_json::Value, Error> {
-                if let serde_json::Value::Object(mut object) = json {
-                    let method = object
-                        .remove("method")
-                        .ok_or(ErrorKind::MissingMethodField)
-                        .and_then(|value| match value {
-                            serde_json::Value::String(s) => Ok(s),
-                            _ => Err(ErrorKind::MethodFieldNotString),
-                        })
-                        .map_err(|kind| Error {
-                            method_name: None,
-                            kind,
-                        })?;
-
-                    let args = object
-                        .remove("params")
-                        .ok_or(ErrorKind::MissingParamsField)
-                        .map_err(|kind| Error {
+                pub fn call_method(
+                    this: &impl #trait_ident,
+                    method: &str,
+                    args: serde_json::Value,
+                ) -> Result<serde_json::Value, Error> {
+                    match method {
+                        "add" => Err(Error {
                             method_name: Some(method.to_string()),
-                            kind,
-                        })?;
-
-                    call_method(this, &method, args)
-                } else {
-                    Err(Error {
-                        method_name: None,
-                        kind: ErrorKind::MethodCallNotAnObject,
-                    })
-                }
-            }
-
-            pub fn call_dynamic_mut(
-                this: &mut impl #trait_name,
-                json: serde_json::Value,
-            ) -> Result<serde_json::Value, Error> {
-                if let serde_json::Value::Object(mut object) = json {
-                    let method = object
-                        .remove("method")
-                        .ok_or(ErrorKind::MissingMethodField)
-                        .and_then(|value| match value {
-                            serde_json::Value::String(s) => Ok(s),
-                            _ => Err(ErrorKind::MethodFieldNotString),
-                        })
-                        .map_err(|kind| Error {
-                            method_name: None,
-                            kind,
-                        })?;
-
-                    let args = object
-                        .remove("params")
-                        .ok_or(ErrorKind::MissingParamsField)
-                        .map_err(|kind| Error {
+                            kind: ErrorKind::MethodRequiresMut,
+                        }),
+                        _ => Err(Error {
                             method_name: Some(method.to_string()),
-                            kind,
-                        })?;
+                            kind: ErrorKind::NoSuchMethod,
+                        }),
+                    }
+                }
 
-                    call_method_mut(this, &method, args)
-                } else {
-                    Err(Error {
-                        method_name: None,
-                        kind: ErrorKind::MethodCallNotAnObject,
-                    })
+                pub fn call_method_mut(
+                    this: &mut impl #trait_ident,
+                    method: &str,
+                    args: serde_json::Value,
+                ) -> Result<serde_json::Value, Error> {
+                    match method {
+                        "add" => call_method_add(this, args),
+                        _ => Err(Error {
+                            method_name: Some(method.to_string()),
+                            kind: ErrorKind::NoSuchMethod,
+                        }),
+                    }
+                }
+
+                pub fn call_dynamic(
+                    this: &impl #trait_ident,
+                    json: serde_json::Value,
+                ) -> Result<serde_json::Value, Error> {
+                    if let serde_json::Value::Object(mut object) = json {
+                        let method = object
+                            .remove("method")
+                            .ok_or(ErrorKind::MissingMethodField)
+                            .and_then(|value| match value {
+                                serde_json::Value::String(s) => Ok(s),
+                                _ => Err(ErrorKind::MethodFieldNotString),
+                            })
+                            .map_err(|kind| Error {
+                                method_name: None,
+                                kind,
+                            })?;
+
+                        let args = object
+                            .remove("params")
+                            .ok_or(ErrorKind::MissingParamsField)
+                            .map_err(|kind| Error {
+                                method_name: Some(method.to_string()),
+                                kind,
+                            })?;
+
+                        call_method(this, &method, args)
+                    } else {
+                        Err(Error {
+                            method_name: None,
+                            kind: ErrorKind::MethodCallNotAnObject,
+                        })
+                    }
+                }
+
+                pub fn call_dynamic_mut(
+                    this: &mut impl #trait_ident,
+                    json: serde_json::Value,
+                ) -> Result<serde_json::Value, Error> {
+                    if let serde_json::Value::Object(mut object) = json {
+                        let method = object
+                            .remove("method")
+                            .ok_or(ErrorKind::MissingMethodField)
+                            .and_then(|value| match value {
+                                serde_json::Value::String(s) => Ok(s),
+                                _ => Err(ErrorKind::MethodFieldNotString),
+                            })
+                            .map_err(|kind| Error {
+                                method_name: None,
+                                kind,
+                            })?;
+
+                        let args = object
+                            .remove("params")
+                            .ok_or(ErrorKind::MissingParamsField)
+                            .map_err(|kind| Error {
+                                method_name: Some(method.to_string()),
+                                kind,
+                            })?;
+
+                        call_method_mut(this, &method, args)
+                    } else {
+                        Err(Error {
+                            method_name: None,
+                            kind: ErrorKind::MethodCallNotAnObject,
+                        })
+                    }
                 }
             }
-        }
-    };
+        };
 
-    TokenStream::from(expanded)
+    proc_macro::TokenStream::from(expanded)
 }
