@@ -1,5 +1,8 @@
 # dynamic_call
 
+[![Crates.io](https://img.shields.io/crates/v/dynamic_call.svg)](https://crates.io/crates/dynamic_call)
+[![Documentation](https://docs.rs/dynamic_call/badge.svg)](https://docs.rs/dynamic_call)
+
 This crate allows looking up a trait method by name at runtime,
 and calling the method with json arguments deserialized using `serde_json`.
 

@@ -2,6 +2,7 @@
 name = "dynamic_call"
 version = "0.1.0"
 edition = "2021"
+readme = "../README.md"
 
 license.workspace = true
 description.workspace = true
