@@ -1,23 +1,37 @@
-use std::{array, error, fmt};
+use std::{error, fmt};
 
 pub use dynamic_call_derive::{dynamic_call, skip};
-use serde::{de::DeserializeOwned, ser::Serialize};
-pub use serde_json;
+
+pub mod derive_helpers;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SelfType {
+    Ref,
+    MutRef,
+    Value,
+    Static,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MethodInfo {
+    pub name: &'static str,
+    pub self_type: SelfType,
+    pub param_names: Vec<Option<&'static str>>,
+}
 
 #[derive(Debug)]
 pub struct Error {
-    pub method_name: Option<String>,
+    pub method_name: String,
     pub kind: ErrorKind,
 }
 
 #[derive(Debug)]
 pub enum ErrorKind {
-    MethodCallNotAnObject,
-    MissingMethodField,
-    MethodFieldNotString,
-    MissingParamsField,
     NoSuchMethod,
-    MethodRequiresMut,
+    WrongSelfType {
+        expected: SelfType,
+        actual: SelfType,
+    },
     DeserializeArgError {
         param: &'static str,
         error: serde_json::Error,
@@ -37,16 +51,24 @@ pub enum ErrorKind {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(method_name) = &self.method_name {
-            write!(f, "while calling {}: ", method_name)?;
-        }
+        write!(f, "while calling {}: ", self.method_name)?;
         match &self.kind {
-            ErrorKind::MethodCallNotAnObject => write!(f, "method call json is not an object"),
-            ErrorKind::MethodFieldNotString => write!(f, "field 'method' is not a string"),
-            ErrorKind::MissingMethodField => write!(f, "missing 'method' field"),
-            ErrorKind::MissingParamsField => write!(f, "missing 'params' field"),
             ErrorKind::NoSuchMethod => write!(f, "no such method"),
-            ErrorKind::MethodRequiresMut => write!(f, "method requires mutable self reference"),
+            ErrorKind::WrongSelfType { expected, actual } => {
+                match expected {
+                    SelfType::Ref => write!(f, "method requires `&self`, ")?,
+                    SelfType::MutRef => write!(f, "method requires `&mut self`, ")?,
+                    SelfType::Value => write!(f, "method requires `self`, ")?,
+                    SelfType::Static => write!(f, "method is static, ")?,
+                };
+                match actual {
+                    SelfType::Ref => write!(f, "called with `&self`")?,
+                    SelfType::MutRef => write!(f, "called with `&mut self`")?,
+                    SelfType::Value => write!(f, "called with `self`")?,
+                    SelfType::Static => write!(f, "called without `self` param")?,
+                }
+                Ok(())
+            }
             ErrorKind::DeserializeArgError { param, error } => {
                 write!(f, "failed to deserialize argument {}: {}", param, error)
             }
@@ -70,53 +92,45 @@ impl error::Error for Error {}
 
 pub trait Foo {
     fn add(&mut self, x: &i32, y: i32) -> i32;
+    fn foo(&self) -> i32;
+    fn show<'a>(self, s: &'a str, v: &[i32], w: i32, x: &i32) -> &'a str;
 }
 
-pub fn get_serialized_args<const N: usize>(
-    args: serde_json::Value,
-    param_names: &[&'static str; N],
-) -> Result<[serde_json::Value; N], ErrorKind> {
-    match args {
-        serde_json::Value::Array(array) => {
-            if array.len() < 2 {
-                return Err(ErrorKind::TooFewArgs {
-                    expected: 2,
-                    actual: array.len(),
-                });
-            }
-            Ok(array.try_into().unwrap())
-        }
-        serde_json::Value::Object(mut fields) => {
-            let mut arg_values: [serde_json::Value; N] =
-                array::from_fn(|_| serde_json::Value::Null);
-            for (i, &name) in param_names.iter().enumerate() {
-                let value = fields
-                    .remove(name)
-                    .ok_or(ErrorKind::MissingArg { param: name })?;
-                arg_values[i] = value;
-            }
-            Ok(arg_values)
-        }
-        _ => Err(ErrorKind::ArgsNotArrayOrObject),
-    }
-}
-
-pub fn deserialize_arg<T: DeserializeOwned>(
-    arg: serde_json::Value,
-    param: &'static str,
-) -> Result<T, ErrorKind> {
-    serde_json::from_value::<T>(arg)
-        .map_err(|error| ErrorKind::DeserializeArgError { param, error })
-}
-
-pub fn serialize_result<T: Serialize>(result: T) -> Result<serde_json::Value, ErrorKind> {
-    serde_json::to_value(result).map_err(|error| ErrorKind::SerializeResultError { error })
-}
-
+#[allow(unused)]
 mod foo_dynamic_call {
-    use crate::{deserialize_arg, get_serialized_args, serialize_result, Error, ErrorKind};
+    use crate::derive_helpers::{deserialize_arg, get_serialized_args, serialize_result};
+    use crate::{Error, ErrorKind, MethodInfo, SelfType};
 
     use super::Foo;
+
+    pub fn method(name: &str) -> Option<MethodInfo> {
+        match name {
+            "add" => Some(MethodInfo {
+                name: "add",
+                self_type: SelfType::MutRef,
+                param_names: vec![Some("x"), Some("y")],
+            }),
+            "foo" => Some(MethodInfo {
+                name: "foo",
+                self_type: SelfType::Ref,
+                param_names: vec![],
+            }),
+            "show" => Some(MethodInfo {
+                name: "show",
+                self_type: SelfType::Value,
+                param_names: vec![Some("s"), Some("v"), Some("w"), Some("x")],
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn methods() -> Vec<MethodInfo> {
+        vec![
+            method("add").unwrap(),
+            method("foo").unwrap(),
+            method("show").unwrap(),
+        ]
+    }
 
     pub fn call_method_add(
         this: &mut impl Foo,
@@ -124,8 +138,8 @@ mod foo_dynamic_call {
     ) -> Result<serde_json::Value, Error> {
         let inner = || -> Result<serde_json::Value, ErrorKind> {
             let [x_json, y_json] = get_serialized_args(args, &["x", "y"])?;
-            let x = deserialize_arg(x_json, "x")?;
-            let y = deserialize_arg(y_json, "y")?;
+            let mut x = deserialize_arg(x_json, "x")?;
+            let mut y = deserialize_arg(y_json, "y")?;
 
             let result = Foo::add(this, &x, y);
 
@@ -133,107 +147,79 @@ mod foo_dynamic_call {
             Ok(result_value)
         };
         inner().map_err(|kind| Error {
-            method_name: Some("add".to_string()),
+            method_name: "add".to_string(),
             kind,
         })
     }
 
-    pub fn call_method(
+    pub fn call_method_foo(
         this: &impl Foo,
-        method: &str,
         args: serde_json::Value,
     ) -> Result<serde_json::Value, Error> {
-        match method {
-            "add" => Err(Error {
-                method_name: Some(method.to_string()),
-                kind: ErrorKind::MethodRequiresMut,
-            }),
-            _ => Err(Error {
-                method_name: Some(method.to_string()),
-                kind: ErrorKind::NoSuchMethod,
-            }),
-        }
+        let inner = || -> Result<serde_json::Value, ErrorKind> {
+            let [] = get_serialized_args(args, &[])?;
+
+            let result = Foo::foo(this);
+
+            let result_value = serialize_result(result)?;
+            Ok(result_value)
+        };
+        inner().map_err(|kind| Error {
+            method_name: "add".to_string(),
+            kind,
+        })
     }
 
-    pub fn call_method_mut(
-        this: &mut impl Foo,
-        method: &str,
+    pub fn call_method_show(
+        this: impl Foo,
         args: serde_json::Value,
     ) -> Result<serde_json::Value, Error> {
-        match method {
-            "add" => call_method_add(this, args),
-            _ => Err(Error {
-                method_name: Some(method.to_string()),
-                kind: ErrorKind::NoSuchMethod,
-            }),
-        }
+        let inner = || -> Result<serde_json::Value, ErrorKind> {
+            let [s_json, v_json, w_json, x_json] =
+                get_serialized_args(args, &["s", "v", "w", "x"])?;
+            let s: <str as ToOwned>::Owned = deserialize_arg(s_json, "s")?;
+            let v: <[i32] as ToOwned>::Owned = deserialize_arg(v_json, "v")?;
+            let w: <i32 as ToOwned>::Owned = deserialize_arg(w_json, "w")?;
+            let x: <i32 as ToOwned>::Owned = deserialize_arg(x_json, "x")?;
+
+            let result = Foo::show(this, &s, &v, w, &x);
+
+            let result_value = serialize_result(result)?;
+            Ok(result_value)
+        };
+        inner().map_err(|kind| Error {
+            method_name: "show".to_string(),
+            kind,
+        })
     }
 
     pub fn call_dynamic(
         this: &impl Foo,
-        json: serde_json::Value,
+        method_name: &str,
+        args: serde_json::Value,
     ) -> Result<serde_json::Value, Error> {
-        if let serde_json::Value::Object(mut object) = json {
-            let method = object
-                .remove("method")
-                .ok_or(ErrorKind::MissingMethodField)
-                .and_then(|value| match value {
-                    serde_json::Value::String(s) => Ok(s),
-                    _ => Err(ErrorKind::MethodFieldNotString),
-                })
-                .map_err(|kind| Error {
-                    method_name: None,
-                    kind,
-                })?;
-
-            let args = object
-                .remove("params")
-                .ok_or(ErrorKind::MissingParamsField)
-                .map_err(|kind| Error {
-                    method_name: Some(method.to_string()),
-                    kind,
-                })?;
-
-            call_method(this, &method, args)
-        } else {
-            Err(Error {
-                method_name: None,
-                kind: ErrorKind::MethodCallNotAnObject,
-            })
-        }
-    }
-
-    pub fn call_dynamic_mut(
-        this: &mut impl Foo,
-        json: serde_json::Value,
-    ) -> Result<serde_json::Value, Error> {
-        if let serde_json::Value::Object(mut object) = json {
-            let method = object
-                .remove("method")
-                .ok_or(ErrorKind::MissingMethodField)
-                .and_then(|value| match value {
-                    serde_json::Value::String(s) => Ok(s),
-                    _ => Err(ErrorKind::MethodFieldNotString),
-                })
-                .map_err(|kind| Error {
-                    method_name: None,
-                    kind,
-                })?;
-
-            let args = object
-                .remove("params")
-                .ok_or(ErrorKind::MissingParamsField)
-                .map_err(|kind| Error {
-                    method_name: Some(method.to_string()),
-                    kind,
-                })?;
-
-            call_method_mut(this, &method, args)
-        } else {
-            Err(Error {
-                method_name: None,
-                kind: ErrorKind::MethodCallNotAnObject,
-            })
+        match method_name {
+            "foo" => call_method_foo(this, args),
+            "add" | "show" => Err(Error {
+                method_name: method_name.to_string(),
+                kind: ErrorKind::WrongSelfType {
+                    expected: SelfType::Ref,
+                    actual: SelfType::Ref,
+                },
+            }),
+            _ => match method(method_name) {
+                Some(info) => Err(Error {
+                    method_name: method_name.to_string(),
+                    kind: ErrorKind::WrongSelfType {
+                        expected: info.self_type,
+                        actual: SelfType::Ref,
+                    },
+                }),
+                None => Err(Error {
+                    method_name: method_name.to_string(),
+                    kind: ErrorKind::NoSuchMethod,
+                }),
+            },
         }
     }
 }
