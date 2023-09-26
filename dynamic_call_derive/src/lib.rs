@@ -277,6 +277,13 @@ fn generate_call_dynamic(
         None => quote!(),
     };
 
+    let self_type = match self_ref_type {
+        Some(RefType::Ref) => quote!(SelfType::Ref),
+        Some(RefType::MutRef) => quote!(SelfType::MutRef),
+        Some(RefType::Value) => quote!(SelfType::Value),
+        None => quote!(SelfType::Static),
+    };
+
     let method_match_arms = methods
         .iter()
         .filter_map(|method| {
@@ -314,7 +321,7 @@ fn generate_call_dynamic(
                         method_name: method_name.to_string(),
                         kind: ErrorKind::WrongSelfType {
                             expected: info.self_type,
-                            actual: SelfType::Ref,
+                            actual: #self_type,
                         },
                     }),
                     None => Err(Error {

@@ -11,9 +11,9 @@ pub fn get_serialized_args<const N: usize>(
 ) -> Result<[serde_json::Value; N], ErrorKind> {
     match args {
         serde_json::Value::Array(array) => {
-            if array.len() < 2 {
+            if array.len() < param_names.len() {
                 return Err(ErrorKind::TooFewArgs {
-                    expected: 2,
+                    expected: param_names.len(),
                     actual: array.len(),
                 });
             }

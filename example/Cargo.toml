@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 dynamic_call = { path = "../dynamic_call" }
+serde_json = "1.0"
