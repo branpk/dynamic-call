@@ -7,6 +7,7 @@ use syn::{
     TraitItemFn, Type,
 };
 
+/// Information about a method signature.
 #[derive(Debug, Clone)]
 struct Method {
     ident: Ident,
@@ -14,6 +15,7 @@ struct Method {
     params: Vec<Param>,
 }
 
+/// A parameter name and type.
 #[derive(Clone)]
 struct Param {
     ident: Ident,
@@ -30,6 +32,7 @@ impl fmt::Debug for Param {
     }
 }
 
+/// The reference type of a parameter (doesn't consider nested references).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RefType {
     Ref,
@@ -37,6 +40,7 @@ enum RefType {
     Value,
 }
 
+/// Skips a particular method from being included in the dynamic call implementation.
 #[proc_macro_attribute]
 pub fn skip(
     _args: proc_macro::TokenStream,
@@ -45,6 +49,7 @@ pub fn skip(
     input
 }
 
+/// Returns true if the attribute is equal to `dynamic_call::skip`.
 fn is_skip_attr(attr: &Attribute) -> bool {
     let path = attr.path();
     path.segments.len() == 2
@@ -52,6 +57,7 @@ fn is_skip_attr(attr: &Attribute) -> bool {
         && path.segments[1].ident == "skip"
 }
 
+/// Splits a type into its reference type and the inner type.
 fn split_type(ty: &Type) -> (RefType, Type) {
     match ty {
         Type::Paren(paren) => split_type(&paren.elem),
@@ -66,6 +72,7 @@ fn split_type(ty: &Type) -> (RefType, Type) {
     }
 }
 
+/// Reads a trait method item and returns a [Method] based on its signature.
 fn read_method(func: &TraitItemFn) -> Method {
     let ident = func.sig.ident.clone();
 
@@ -86,7 +93,7 @@ fn read_method(func: &TraitItemFn) -> Method {
                 Param {
                     ident: match &*pat_type.pat {
                         Pat::Ident(pat_ident) => pat_ident.ident.clone(),
-                        _ => Ident::new(&format!("_arg{i}"), pat_type.pat.span()),
+                        _ => Ident::new(&format!("__arg{i}"), pat_type.pat.span()),
                     },
                     ref_type,
                     inner_ty,
@@ -102,6 +109,8 @@ fn read_method(func: &TraitItemFn) -> Method {
     }
 }
 
+/// Reads the methods from the trait which should be included in the dynamic call
+/// implementation.
 fn read_methods(input: &ItemTrait) -> Vec<Method> {
     let mut methods = Vec::new();
     for item in &input.items {
@@ -115,6 +124,8 @@ fn read_methods(input: &ItemTrait) -> Vec<Method> {
     methods
 }
 
+/// Generates the `method` and `methods` functions, which return information about
+/// the signature of methods in the trait.
 fn generate_method_info(methods: &[Method]) -> TokenStream {
     let method_match_arms = methods
         .iter()
@@ -132,7 +143,7 @@ fn generate_method_info(methods: &[Method]) -> TokenStream {
                 .iter()
                 .map(|param| {
                     let name_lit = param.ident.to_string();
-                    quote!(Some(#name_lit))
+                    quote!(#name_lit)
                 })
                 .collect::<Vec<_>>();
 
@@ -157,6 +168,10 @@ fn generate_method_info(methods: &[Method]) -> TokenStream {
         .collect::<Vec<_>>();
 
     quote! {
+        /// Returns information about the signature of the given method.
+        ///
+        /// Returns `None` if the method is not a member of the trait or has been skipped
+        /// using the `#[dynamic_call::skip]` attribute.
         pub fn method(name: &str) -> Option<MethodInfo> {
             match name {
                 #(#method_match_arms)*
@@ -164,12 +179,18 @@ fn generate_method_info(methods: &[Method]) -> TokenStream {
             }
         }
 
+        /// Returns a list of methods in the trait, in declaration order.
+        ///
+        /// Excludes methods which have been skipped using the `#[dynamic_call::skip]`
+        /// attribute.
         pub fn methods() -> Vec<MethodInfo> {
             [#(#method_info_calls)*].into()
         }
     }
 }
 
+/// Generates the `call_method_X` method for a given method, which allows calling the
+/// method with json params.
 fn generate_call_specific_method(trait_ident: &Ident, method: &Method) -> TokenStream {
     let method_ident = &method.ident;
     let method_name_lit = method_ident.to_string();
@@ -236,7 +257,13 @@ fn generate_call_specific_method(trait_ident: &Ident, method: &Method) -> TokenS
         })
         .collect::<Vec<_>>();
 
+    let doc_comment = format!(
+        "Deserializes the given arguments using `serde_json` and calls [{trait_ident}::{method_ident}].\n\n\
+        The arguments must be an array or an object with keys equal to the parameter names.",
+    );
+
     quote! {
+        #[doc=#doc_comment]
         pub fn #call_method_name<T: #trait_ident>(
             #this_param
             args: serde_json::Value,
@@ -258,6 +285,7 @@ fn generate_call_specific_method(trait_ident: &Ident, method: &Method) -> TokenS
     }
 }
 
+/// Generates a `call_dynamic_X` which looks up and calls a method from its name.
 fn generate_call_dynamic(
     trait_ident: &Ident,
     self_ref_type: Option<RefType>,
@@ -308,7 +336,21 @@ fn generate_call_dynamic(
         })
         .collect::<Vec<_>>();
 
+    let allowed_method_clause = match self_ref_type {
+        Some(RefType::Ref) => "a static or `&self`",
+        Some(RefType::MutRef) => "a static, `&self`, or `&mut self`",
+        Some(RefType::Value) => "any",
+        None => "a static",
+    };
+
+    let doc_comment = format!(
+        "Calls {allowed_method_clause} method of [{trait_ident}] dynamically.\n\n\
+        The method name must be one of the methods in the trait. \
+        The arguments must be an array or an object with keys equal to the parameter names.",
+    );
+
     quote! {
+        #[doc=#doc_comment]
         pub fn #call_dynamic_ident<T: #trait_ident>(
             #this_param
             method_name: &str,
@@ -334,6 +376,10 @@ fn generate_call_dynamic(
     }
 }
 
+/// Generates a module with the given name, which implements the ability to call
+/// trait methods dynamically.
+///
+/// See the crate-level documentation of `dynamic_call` for more info.
 #[proc_macro_attribute]
 pub fn dynamic_call(
     args: proc_macro::TokenStream,
@@ -362,11 +408,17 @@ pub fn dynamic_call(
     .map(|self_ref_type| generate_call_dynamic(trait_ident, self_ref_type, &methods))
     .collect::<Vec<_>>();
 
+    let module_doc = format!(
+        "This module is generated by the `dynamic_call` macro and provides the \
+        ability to call methods of [{trait_ident}] dynamically."
+    );
+
     let expanded = quote! {
         #input
 
         #[allow(unused)]
-        mod #args {
+        #[doc=#module_doc]
+        pub mod #args {
             use ::dynamic_call::*;
             use ::dynamic_call::derive_helpers::*;
 

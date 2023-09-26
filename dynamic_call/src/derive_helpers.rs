@@ -1,3 +1,7 @@
+//! Helper methods used by the derive macro.
+
+#![allow(missing_docs)]
+
 use std::array;
 
 use serde::{de::DeserializeOwned, Serialize};

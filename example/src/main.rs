@@ -2,7 +2,7 @@ use dynamic_call::dynamic_call;
 use serde_json::json;
 
 #[dynamic_call(bar_dynamic_call)]
-pub trait Bar {
+trait Bar {
     #[dynamic_call::skip]
     fn foo(&self, x: i32) -> i32;
 
@@ -20,6 +20,12 @@ pub trait Bar {
     fn empty_static();
 
     fn empty_ref(&self);
+}
+
+#[dynamic_call::dynamic_call(foo_dynamic_call)]
+trait Foo {
+    fn add(&mut self, x: i32) -> i32;
+    fn show(&self, message: &str);
 }
 
 #[derive(Debug, Clone)]
