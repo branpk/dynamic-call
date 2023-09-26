@@ -1,7 +1,11 @@
 [package]
-name = "dynamic_call_derive"
+name = "dynamic_call_proc_macro"
 version = "0.1.0"
 edition = "2021"
+
+license.workspace = true
+description.workspace = true
+repository.workspace = true
 
 [dependencies]
 syn = { version = "2.0", features = ["full"] }

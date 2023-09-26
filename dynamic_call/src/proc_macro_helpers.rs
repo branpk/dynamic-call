@@ -1,4 +1,4 @@
-//! Helper methods used by the derive macro.
+//! Helper methods used by the proc macro.
 
 #![allow(missing_docs)]
 

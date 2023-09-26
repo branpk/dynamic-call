@@ -2,11 +2,12 @@
 name = "dynamic_call"
 version = "0.1.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
-description = "Look up a trait method by name at runtime, and call it using json"
-respository = "https://github.com/branpk/dynamic-call"
+
+license.workspace = true
+description.workspace = true
+repository.workspace = true
 
 [dependencies]
 serde = "1.0"
 serde_json = "1.0"
-dynamic_call_derive = { path = "../dynamic_call_derive" }
+dynamic_call_proc_macro = { path = "../dynamic_call_proc_macro", version = "0.1.0" }

@@ -124,9 +124,9 @@
 
 use std::{error, fmt};
 
-pub use dynamic_call_derive::{dynamic_call, skip};
+pub use dynamic_call_proc_macro::{dynamic_call, skip};
 
-pub mod derive_helpers;
+pub mod proc_macro_helpers;
 
 /// The type of `self` in a method signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

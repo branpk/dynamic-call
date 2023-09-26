@@ -6,13 +6,13 @@ version = 3
 name = "dynamic_call"
 version = "0.1.0"
 dependencies = [
- "dynamic_call_derive",
+ "dynamic_call_proc_macro",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "dynamic_call_derive"
+name = "dynamic_call_proc_macro"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",

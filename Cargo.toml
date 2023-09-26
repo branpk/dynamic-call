@@ -1,6 +1,12 @@
 [workspace]
 members = [
   "dynamic_call",
-  "dynamic_call_derive",
+  "dynamic_call_proc_macro",
   "example",
 ]
+resolver = "2"
+
+[workspace.package]
+license = "MIT OR Apache-2.0"
+description = "Look up a trait method by name at runtime, and call it using json"
+repository = "https://github.com/branpk/dynamic-call"

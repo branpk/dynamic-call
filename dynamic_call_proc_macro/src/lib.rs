@@ -420,7 +420,7 @@ pub fn dynamic_call(
         #[doc=#module_doc]
         pub mod #args {
             use ::dynamic_call::*;
-            use ::dynamic_call::derive_helpers::*;
+            use ::dynamic_call::proc_macro_helpers::*;
 
             use super::#trait_ident;
 
