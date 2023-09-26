@@ -422,7 +422,7 @@ pub fn dynamic_call(
             use ::dynamic_call::*;
             use ::dynamic_call::proc_macro_helpers::*;
 
-            use super::#trait_ident;
+            use super::*;
 
             #method_info
             #(#call_methods)*
