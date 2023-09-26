@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "dynamic_call",
+  "dynamic_call_derive",
+  "example",
+]

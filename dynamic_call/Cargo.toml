@@ -1,0 +1,9 @@
+[package]
+name = "dynamic_call"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0"
+serde_json = "1.0"
+dynamic_call_derive = { path = "../dynamic_call_derive" }
