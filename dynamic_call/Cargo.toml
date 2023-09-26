@@ -2,6 +2,9 @@
 name = "dynamic_call"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Look up a trait method by name at runtime, and call it using json"
+respository = "https://github.com/branpk/dynamic-call"
 
 [dependencies]
 serde = "1.0"
